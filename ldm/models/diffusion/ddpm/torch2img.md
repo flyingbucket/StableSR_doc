@@ -7,3 +7,4 @@ def torch2img(input):
     cv2.imwrite('./test.png', input_[:,:,::-1]*255.0)
 ```
 
+
