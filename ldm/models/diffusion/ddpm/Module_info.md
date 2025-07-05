@@ -1,5 +1,5 @@
 
-> [!INFO] UML 图解：DDPM 类结构
+> [!INFO] UML 图解：ddpm.py文件结构
 > ![[classes_ddpm.svg]]
 >  'ldm.models.diffusion.ddpm' 中各个类的关系。
 
