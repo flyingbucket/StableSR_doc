@@ -1,7 +1,7 @@
 # init 函数介绍
 
 ```python
-class DDPM(pl.LightningModule): # [[#pl.LightningMoudule]]
+class DDPM(pl.LightningModule): # [[pytorch lightning#pl.LightningMoudule]]
     # classic DDPM with Gaussian diffusion, in image space
     def __init__(self,
                  unet_config,
@@ -59,16 +59,17 @@ class DDPM(pl.LightningModule): # [[#pl.LightningMoudule]]
         self.original_elbo_weight = original_elbo_weight
         self.l_simple_weight = l_simple_weight
 
-        if monitor is not None:
-            self.monitor = monitor
-        if ckpt_path is not None:
-            self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys, only_model=load_only_unet)
-
+        if monitor is not None: # [[#📈 PyTorch Lightning 中的 `monitor` 参数简析]]
+            self.monitor = monitor 
+        if ckpt_path is not None: # 加载预训练模型
+            self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys, only_model=load_only_unet) # [[init_from_ckpt]]
+		# [[#line 64 to end]]
+		# [[#1. 注册调度表（beta schedule）]]
         self.register_schedule(given_betas=given_betas, beta_schedule=beta_schedule, timesteps=timesteps,
                                linear_start=linear_start, linear_end=linear_end, cosine_s=cosine_s)
-
+		# [[#2. 设置损失函数类型]]
         self.loss_type = loss_type
-
+		# [[#logvar 在 DDPM 扩散模型中的作用与实现]]
         self.learn_logvar = learn_logvar
         self.logvar = torch.full(fill_value=logvar_init, size=(self.num_timesteps,))
         if self.learn_logvar:
@@ -76,25 +77,6 @@ class DDPM(pl.LightningModule): # [[#pl.LightningMoudule]]
 
 ```
 
-## pl.LightningMoudule 
-
-`pl.LightningModule` 是对 `torch.nn.Module` 的高级封装
-只需要实现下面几个关键方法，它就能帮你自动完成训练流程、GPU 分发、日志记录、checkpoint保存等复杂操作：
-
-- 1. `__init__(self)`: 初始化模型结构、损失函数、超参数等。
-    
-- 2. `forward(self, x)`: 定义**前向传播**逻辑（注意：仅在调用 `model(x)` 时使用，**训练逻辑用 `training_step`**）。
-    
-- 3. `training_step(self, batch, batch_idx)`:定义**一个训练步骤**的行为，返回 `loss`。
-	- 通常的步骤是
-	    - 从 `batch` 取出数据；
-	    - 前向传播；
-	    - 计算损失；
-	    - 使用 `self.log(...)` 自动记录日志（如 loss）。
-        
-- 4. `validation_step(...)` / `test_step(...)`:验证和测试阶段的行为，结构与 `training_step` 类似。
-    
-- 5. `configure_optimizers(self)`:返回优化器和（可选的）学习率调度器。
 
 
 ## parameterization
@@ -138,7 +120,9 @@ if self.use_ema:
 - `LitEma` 是一个内部实现的 EMA 工具类（模仿 PyTorch EMA 实现）；
 - `buffers()` 提供了所有被 EMA 追踪的张量（通常是模型权重）。
 
----
+PS. [EMA](https://zhuanlan.zhihu.com/p/68748778)简介
+指数移动平均（Exponential Moving Average）也叫权重移动平均（Weighted Moving Average），是一种给予近期数据更高权重的平均方法。
+
 
 ### 📈 训练调度器配置（如学习率调度）
 
@@ -175,7 +159,8 @@ self.l_simple_weight = l_simple_weight
 
 ---
 
-## ✅ 小结
+
+### ✅ 小结
 
 这一部分为训练过程提供了必要的配置管理：
 - **模型参数统计**有助于可视化规模；
@@ -184,9 +169,225 @@ self.l_simple_weight = l_simple_weight
 - **损失项加权**控制生成模型优化目标的侧重点。
 
 
+## 📈 PyTorch Lightning 中的 `monitor` 参数简析
+
+`monitor` 是 PyTorch Lightning 中回调（Callback）机制的一部分，用于指定**训练过程中要监控的指标名称**，供如 `ModelCheckpoint`、`EarlyStopping` 等回调依据该指标执行相应逻辑（如保存模型、提前停止等）。
+详见[[pytorch lightning#pytorch_Lightning Callback 机制]]
+
+---
+
+### ✅ 关键用途
+
+| 组件                | 用途             |
+| ----------------- | -------------- |
+| `ModelCheckpoint` | 保存性能最好的模型      |
+| `EarlyStopping`   | 在验证指标停止提升时中止训练 |
+
+---
+
+### 🧩 monitor 的工作流程
+
+1. **模型内部记录指标**：
+   ```python
+   self.log("val/loss", val_loss, prog_bar=True)
+   ```
+
+2. **指定 monitor 的回调监听这个指标**：
+   ```python
+   ModelCheckpoint(monitor="val/loss", mode="min")
+   ```
+
+3. **Lightning 自动比较并触发保存 / 停止逻辑**。
+
+---
+
+### ⚙️ monitor 示例配置
+
+```python
+from pytorch_lightning.callbacks import ModelCheckpoint
+
+checkpoint = ModelCheckpoint(
+    monitor="val/psnr",   # 监听 PSNR 指标
+    mode="max",           # 指标越大越好
+    save_top_k=1,
+    filename="best-psnr"
+)
+```
+
+```python
+from pytorch_lightning.callbacks import EarlyStopping
+
+early_stop = EarlyStopping(
+    monitor="val/loss",
+    mode="min",
+    patience=5
+)
+```
+
+---
+
+### 🧠 说明
+
+- `monitor` 是一个字符串，必须和 `.log(...)` 中记录的名字一致；
+- 不会自动创建指标值，只是引用已有指标；
+- 和 `mode` 一起决定何时触发操作（`min` → 越小越好，`max` → 越大越好）；
+- 在模型类中可用 `self.monitor` 传递给 callback 实现动态配置。
+
+---
+
+### ✅ 总结
+
+- `monitor` 是 **回调系统监听的指标名称**；
+- 配合 `.log(...)` 使用；
+- 决定是否保存模型 / 提前停止；
+- 本身不计算指标，仅作为引用字段使用。
 
 
+## line 64 to end
 
+这一部分主要完成了噪声调度与损失配置,具体来说,
+本部分代码完成了扩散过程中的**beta调度表构建**(即噪声调度)、**损失函数类型设定**和**对数方差的初始化**，是 DDPM 建模核心参数的关键配置步骤。
+
+---
+
+### 1. 注册调度表（beta schedule）
+
+```python
+self.register_schedule(
+    given_betas=given_betas,
+    beta_schedule=beta_schedule,
+    timesteps=timesteps,
+    linear_start=linear_start,
+    linear_end=linear_end,
+    cosine_s=cosine_s
+)
+```
+
+- 该函数根据 `beta_schedule` 的类型（如 "linear" 或 "cosine"）构建扩散过程中的时间步噪声系数表；
+- 通常会生成如下参数：
+  - `betas`：每一步的噪声幅度；
+  - `alphas`, `alphas_cumprod`, `sqrt_alphas_cumprod`, `sqrt_one_minus_alphas_cumprod` 等；
+- 这些系数会在后续 `q_sample`, `q_posterior`, `predict_start_from_noise` 等函数中使用；
+- 参数说明：
+  - `linear_start`, `linear_end`: 用于线性 beta 调度起止值；
+  - `cosine_s`: 用于调整余弦调度的形状；
+  - `given_betas`: 若提供，优先使用用户自定义 beta 表。
+
+---
+
+### 2. 设置损失函数类型
+
+```python
+self.loss_type = loss_type
+```
+
+- 控制训练时使用哪种损失：
+  - `"l2"`（默认）：预测的噪声与真实噪声之间的均方误差；
+  - `"l1"`：预测残差的绝对值损失；
+  - 也可能支持其他自定义损失类型，如 perceptual loss、hybrid loss 等；
+- 实际使用在 `get_loss()` 或 `p_losses()` 中处理。
+
+---
+
+### 3. 初始化对数方差（log-variance）
+
+```python
+self.learn_logvar = learn_logvar
+self.logvar = torch.full(fill_value=logvar_init, size=(self.num_timesteps,))
+if self.learn_logvar:
+    self.logvar = nn.Parameter(self.logvar, requires_grad=True)
+```
+
+- `logvar` 是一个长度为 `num_timesteps` 的张量，表示每一扩散时间步的对数方差；
+- 如果启用 `learn_logvar=True`，则将其设为可学习参数（`nn.Parameter`），允许模型自动优化每一时间步的不确定性；
+- 如果不启用，`logvar` 就是一个固定的常量值张量；
+- 在 `get_loss()` 中会参与 KL 项或 likelihood 的权重调整。
+#### logvar 在 DDPM 扩散模型中的作用与实现
+
+`logvar`（对数方差）是扩散模型（如 DDPM）中用于控制训练损失权重和不确定性建模的一个重要变量。在 StableSR 和 DDPM 实现中，它是 diffusion 模型的一部分，而非 encoder 或 decoder 的组成部分。
+
+---
+
+##### 1. 背景：为何需要 logvar
+
+扩散模型训练时通常以预测噪声为目标，基本损失形式为(以L2损失为例)：
+$$
+L_t = \left\| \varepsilon_{\text{pred}} - \varepsilon_{\text{true}} \right\|^2
+$$
+为了增强灵活性、稳定性或逼近对数似然，一些变体引入了对数方差 logvar，使得损失函数变为：
+$$
+L_t = \frac{1}{2} \cdot \exp(-\text{logvar}_t) \cdot \left\| \varepsilon_{\text{pred}} - \varepsilon_{\text{true}} \right\|^2 + \frac{1}{2} \cdot \text{logvar}_t
+$$
+这相当于使用一个可变的时间步权重项，用于：
+- 控制每一时间步损失的相对重要性；
+- 模拟高斯似然中的分布不确定性；
+- 使得模型对某些时间步预测更加稳健。
+
+---
+
+##### 2. 初始化方式
+
+logvar 通常被初始化为常数张量：
+
+```python
+self.logvar = torch.full(fill_value=logvar_init, size=(self.num_timesteps,))
+```
+
+- `logvar_init`: 对数方差的初始值（常为 0）；
+- `num_timesteps`: 扩散总步数（如 1000）；
+- 得到形状为 `(T,)` 的 logvar 张量，其中 T 是时间步数。
+
+若启用可学习方差：
+
+```python
+if self.learn_logvar:
+    self.logvar = nn.Parameter(self.logvar, requires_grad=True)
+```
+
+则该张量在训练中会自动更新，每一时间步都有不同的可学习不确定性。
+
+---
+
+##### 3. 使用方式（训练时）
+
+logvar 通常参与损失函数定义，在 `get_loss()` 或 `p_losses()` 中用作动态权重：
+
+```python
+loss = weighted_mse / torch.exp(self.logvar[t]) + self.logvar[t]
+```
+
+或更复杂的：
+```python
+loss = loss_weight * loss_raw + offset * logvar[t]
+```
+
+---
+
+##### 4. logvar总结
+
+| 项目    | 内容                             |
+| ----- | ------------------------------ |
+| 名称    | logvar（对数方差）                   |
+| 类型    | Tensor / nn.Parameter          |
+| 维度    | `(num_timesteps,)`             |
+| 用途    | 控制不同时间步的损失权重与不确定性建模            |
+| 初始化方法 | `torch.full(size, fill_value)` |
+| 是否可训练 | 由 `learn_logvar` 参数控制          |
+
+logvar 是一个扩散过程中的权重调节器，尤其在加入 ELBO、VLB 等目标时尤为关键。
+
+
+---
+
+## 总结
+
+| 项目                        | 功能说明                            |
+| ------------------------- | ------------------------------- |
+| `register_schedule()`     | 构造扩散过程中每一步的 beta 参数，用于控制加噪过程    |
+| `loss_type`               | 决定训练时的损失函数类型，如 L2 或 L1          |
+| `learn_logvar` 和 `logvar` | 控制是否学习每个时间步的对数方差，以适配不同的不确定性建模策略 |
+
+这些设置构成了扩散模型训练阶段的核心数学基础。
 
 
 
